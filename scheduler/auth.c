@@ -1624,10 +1624,58 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
       snap_name = strndup(context + SNAP_LABEL_PREFIX_LENGTH,
 			  (size_t)(dot - context - SNAP_LABEL_PREFIX_LENGTH));
       cupsdLogMessage(CUPSD_LOG_DEBUG,
-		      "cupsdCheckAdminTask: Client is the Snap %s, access denied",
+		      "cupsdCheckAdminTask: Client is the Snap %s",
 		      snap_name);
       free(context);
-      return 0;
+      context = NULL;
+
+      SnapdClient *snapd;
+      SnapdSnap *snap = NULL;
+      GPtrArray *plugs = NULL;
+      GError *error = NULL;
+
+      /* Connect to snapd */
+      snapd = snapd_client_new();
+
+      /* Check whether the client Snap is under classic confinement */
+      snap = snapd_client_get_snap_sync(snapd, snap_name, NULL, &error);
+      if (!snap)
+      {
+        cupsdLogMessage(CUPSD_LOG_DEBUG,
+			"cupsdCheckAdminTask: Could not obtain Snap data: %s",
+			error->message);
+	goto no_snap;
+      }
+
+      /* Snaps using classic confinement are granted access */
+      if (snapd_snap_get_confinement(snap) == SNAPD_CONFINEMENT_CLASSIC)
+      {
+        cupsdLogMessage(CUPSD_LOG_DEBUG,
+			"cupsdCheckAdminTask: Client Snap under classic confinement, access granted");
+        goto no_snap;
+      }
+
+      /* Get list of interfaces to which the client Snap is plugging */
+      if (!snapd_client_get_connections2_sync(snapd,
+					      SNAPD_GET_CONNECTIONS_FLAGS_NONE,
+					      snap_name, "cups-control", NULL,
+					      NULL, &plugs, NULL, NULL, &error))
+      {
+        cupsdLogMessage(CUPSD_LOG_DEBUG,
+			"cupsdCheckAdminTask: Could not obtain the Snap's interface connections: %s",
+			error->message);
+	goto no_snap;
+      }
+
+      if (plugs->len <= 0)
+      {
+	cupsdLogMessage(CUPSD_LOG_DEBUG,
+			"cupsdCheckAdminTask: Snap does not connect via \"cups-control\" interface, permission denied");
+	return 0;
+      }
+
+      cupsdLogMessage(CUPSD_LOG_DEBUG,
+		      "cupsdCheckAdminTask: Snap connecting via \"cups-control\" interface, access granted");
 
     no_snap:
       if (context)
