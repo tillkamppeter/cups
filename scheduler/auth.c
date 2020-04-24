@@ -1534,8 +1534,10 @@ cupsdFreeLocation(cupsd_location_t *loc)/* I - Location to free */
 int                                      /* O - 1 if admin task authorized */
 cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
 {
+  int ret = 1; /* Return value */
+
   cupsdLogMessage(CUPSD_LOG_DEBUG,
-		  "cupsdCheckAdminTask: ADMINISTRATIVE TASK!!");
+		  "cupsdCheckAdminTask: Administrative task");
 
 #if defined(SO_PEERCRED) && defined(AF_LOCAL)
  /*
@@ -1559,12 +1561,12 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
 #  endif /* __APPLE__ */
     {
       cupsdLogMessage(CUPSD_LOG_ERROR,
-		      "cupsdCheckAdminTask: Unable to get peer credentials - %s",
+		      "cupsdCheckAdminTask: Unable to get peer credentials of client connecting via domain socket - Error: %s",
 		      strerror(errno));
     }
     else
     {
-      cupsdLogMessage(CUPSD_LOG_DEBUG,
+      cupsdLogMessage(CUPSD_LOG_DEBUG2,
 		      "cupsdCheckAdminTask: Client UID %d PID %d",
 		      CUPSD_UCRED_UID(peercred),
 		      CUPSD_UCRED_PID(peercred));
@@ -1572,7 +1574,7 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
 
       /* Examine client process here */
       cupsdLogMessage(CUPSD_LOG_DEBUG,
-		      "cupsdCheckAdminTask: Examining process %d ...",
+		      "cupsdCheckAdminTask: Clent connecting via domain socket, examining client process %d ...",
 		      client_pid);
 #  ifdef BUILD_SNAP
       cupsdLogMessage(CUPSD_LOG_DEBUG,
@@ -1594,7 +1596,7 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
       {
 	cupsdLogMessage(CUPSD_LOG_DEBUG,
 			"cupsdCheckAdminTask: No AppArmor in use");
-	goto no_snap;
+	goto snap_check_done;
       }
 
       if (aa_gettaskcon(client_pid, &context, NULL) < 0)
@@ -1602,9 +1604,9 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
 	cupsdLogMessage(CUPSD_LOG_DEBUG,
 			"cupsdCheckAdminTask: AppArmor profile could not be retrieved for client process - Error: %s",
 			strerror(errno));
-	goto no_snap;
+	goto snap_check_done;
       } else
-	cupsdLogMessage(CUPSD_LOG_DEBUG,
+	cupsdLogMessage(CUPSD_LOG_DEBUG2,
 			"cupsdCheckAdminTask: AppArmor profile of client process: %s",
 			context);
 
@@ -1614,7 +1616,7 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
       {
 	cupsdLogMessage(CUPSD_LOG_DEBUG,
 			"cupsdCheckAdminTask: AppArmor context not from a Snap");
-        goto no_snap;
+        goto snap_check_done;
       }
 
       dot = strchr(context + SNAP_LABEL_PREFIX_LENGTH, '.');
@@ -1623,7 +1625,7 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
         cupsdLogMessage(CUPSD_LOG_DEBUG,
 			"cupsdCheckAdminTask: Malformed snapd AppArmor profile name: %s",
 			context);
-        goto no_snap;
+        goto snap_check_done;
       }
       snap_name = strndup(context + SNAP_LABEL_PREFIX_LENGTH,
 			  (size_t)(dot - context - SNAP_LABEL_PREFIX_LENGTH));
@@ -1633,15 +1635,23 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
 
       /* Connect to snapd */
       snapd = snapd_client_new();
+      if (!snapd)
+      {
+	cupsdLogMessage(CUPSD_LOG_DEBUG,
+			"cupsdCheckAdminTask: Could not connect to snapd, permission denied");
+	ret = 0;
+	goto snap_check_done;
+      }
 
       /* Check whether the client Snap is under classic confinement */
       snap = snapd_client_get_snap_sync(snapd, snap_name, NULL, &error);
       if (!snap)
       {
         cupsdLogMessage(CUPSD_LOG_DEBUG,
-			"cupsdCheckAdminTask: Could not obtain Snap data: %s",
+			"cupsdCheckAdminTask: Could not obtain Snap data: \"%s\", permission denied",
 			error->message);
-	goto no_snap;
+	ret = 0;
+	goto snap_check_done;
       }
 
       /* Snaps using classic confinement are granted access */
@@ -1649,7 +1659,7 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
       {
         cupsdLogMessage(CUPSD_LOG_DEBUG,
 			"cupsdCheckAdminTask: Client Snap under classic confinement, access granted");
-        goto no_snap;
+        goto snap_check_done;
       }
 
       /* Get list of interfaces to which the client Snap is plugging */
@@ -1659,24 +1669,28 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
 					      NULL, &plugs, NULL, NULL, &error))
       {
         cupsdLogMessage(CUPSD_LOG_DEBUG,
-			"cupsdCheckAdminTask: Could not obtain the Snap's interface connections: %s",
+			"cupsdCheckAdminTask: Could not obtain the Snap's interface connections: \"%s\", permission denied",
 			error->message);
-	goto no_snap;
+	ret = 0;
+	goto snap_check_done;
       }
 
       if (plugs->len <= 0)
       {
 	cupsdLogMessage(CUPSD_LOG_DEBUG,
 			"cupsdCheckAdminTask: Snap does not connect via \"cups-control\" interface, permission denied");
-	return 0;
+	ret = 0;
+	goto snap_check_done;
       }
 
       cupsdLogMessage(CUPSD_LOG_DEBUG,
 		      "cupsdCheckAdminTask: Snap connecting via \"cups-control\" interface, access granted");
 
-    no_snap:
+    snap_check_done:
       if (context)
 	free(context);
+      if (snap_name)
+	free(snap_name);
       if (snapd)
 	g_clear_object(&snapd);
       if (snap)
@@ -1688,7 +1702,11 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
   }
 #endif /* SO_PEERCRED && AF_LOCAL */
 
-  return 1;
+  cupsdLogMessage(CUPSD_LOG_DEBUG,
+		  "cupsdCheckAdminTask: Access %s",
+		  ret == 1 ? "granted" : "denied");
+
+  return ret;
 }
 
 
