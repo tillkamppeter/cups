@@ -1584,6 +1584,10 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
       char *context = NULL;
       char *snap_name = NULL;
       char *dot;
+      SnapdClient *snapd = NULL;
+      SnapdSnap *snap = NULL;
+      GPtrArray *plugs = NULL;
+      GError *error = NULL;
 
       /* If AppArmor is not enabled, then we can't identify the client */
       if (!aa_is_enabled())
@@ -1626,13 +1630,6 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
       cupsdLogMessage(CUPSD_LOG_DEBUG,
 		      "cupsdCheckAdminTask: Client is the Snap %s",
 		      snap_name);
-      free(context);
-      context = NULL;
-
-      SnapdClient *snapd;
-      SnapdSnap *snap = NULL;
-      GPtrArray *plugs = NULL;
-      GError *error = NULL;
 
       /* Connect to snapd */
       snapd = snapd_client_new();
@@ -1680,6 +1677,12 @@ cupsdCheckAdminTask(cupsd_client_t *con) /* I - Connection */
     no_snap:
       if (context)
 	free(context);
+      if (snapd)
+	g_clear_object(&snapd);
+      if (snap)
+	g_clear_object(&snap);
+      if (plugs)
+	g_clear_object(&plugs);
 #  endif /* BUILD_SNAP */
     }
   }
